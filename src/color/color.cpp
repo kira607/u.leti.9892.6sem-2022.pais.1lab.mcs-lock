@@ -1,7 +1,3 @@
-//
-// Created by kirill on 02.05.22.
-//
-
 #include "color.h"
 
 std::ostream& operator<< (std::ostream& out, Color color)
