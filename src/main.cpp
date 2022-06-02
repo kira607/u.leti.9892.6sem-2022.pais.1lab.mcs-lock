@@ -2,77 +2,145 @@
 #include <thread>
 #include <chrono>
 #include <map>
-#include "color/color.h"
-#include "counter/counter.h"
+#include <vector>
+#include <atomic>
+#include <algorithm>
+#include <functional>
+
+#define LOG(msg) {std::cout << msg;} while(0)
+
+#define DBG
+
+#ifdef DBG
+#define DEBUG(msg) {LOG(msg);} while(0)
+#else
+#define DEBUG(msg) {} while(0)
+#endif
 
 
-bool dbg = false;
-
-
-int get_threads_number()
+int getThreadsNumber()
 {
-    return int(std::thread::hardware_concurrency());
+    return static_cast<int>(std::thread::hardware_concurrency());
 }
 
-void job(Counter& c)
-{
-    if (dbg) std::cout << "Thread #" << std::this_thread::get_id() << ": hello from job\n";
-    while(c.get() < 40000){
-        c.getAndSet();
-    }
-    // std::this_thread::sleep_for(std::chrono::seconds(1));
-}
+class McsLock {
+public:
+    McsLock(const McsLock&) = delete;
+    McsLock& operator=(const McsLock&) = delete;
+    McsLock(): _tail(nullptr) {}
 
-void run_threads()
-{
-    int threads_number = get_threads_number();
-    std::thread threads[threads_number];
-    Counter c(0);
-    for (int i = 0; i < threads_number; ++i)
+    class ScopedLock
     {
-        threads[i] = std::thread(job, std::ref(c));
-        if (dbg) std::cout << "Created thread #" << i + 1 << '/' << threads[i].get_id() << std::endl;
-    }
-
-    for (int i = 0; i < threads_number; ++i)
-    {
-        if (dbg) std::cout << "Trying to join #" << i + 1 << '/' << threads[i].get_id() << std::endl;
-        if (threads[i].joinable())
+    public:
+        ScopedLock(const ScopedLock&) = delete;
+        ScopedLock& operator=(const ScopedLock&) = delete;
+        ScopedLock(McsLock &lock) : _lock(lock), _next(nullptr), _owned(false)
         {
-            if (dbg) std::cout << "Joining thread #" << i + 1 << '/' << threads[i].get_id() << std::endl;
-            threads[i].join();
+            ScopedLock *tail = _lock._tail.exchange(this);
+            if (tail != nullptr)
+            {
+                tail->_next = this;
+                while (!_owned) {} /* spin */
+            }
         }
-        else
+        ~ScopedLock()
         {
-            if (dbg) std::cout << "Not joinable: #" << i + 1 << '/' << threads[i].get_id() << std::endl;
+            ScopedLock *tail = this;
+            if (!_lock._tail.compare_exchange_strong(tail, nullptr))
+            {
+                while (_next == nullptr) {} /* spin */
+                _next->_owned = true;
+            }
         }
-    }
-}
+    private:
+        McsLock &_lock;
+        ScopedLock * volatile _next;
+        volatile bool _owned;
+    };
+private:
+    std::atomic<ScopedLock *> _tail;
+};
 
-double run_test(const int& number_of_threads)
+
+template<class mutex, class lock_object>
+class TestLock
 {
-    auto start = std::chrono::high_resolution_clock::now();
-    run_threads();
-    auto finish = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = finish - start;
-    return elapsed.count();
-}
+public:
+    explicit TestLock(
+        const std::string &name,
+        int spins = 1 << 15,
+        int start = 0,
+        int end = 0,
+        std::function<void(mutex *m, int *val, std::size_t n)> job = TestLock::spinner
+    )
+    {
+        _job = job;
+        _name = name;
+        _spins = spins > 0 ? spins : -spins;
+        _start = start >= 1 ? start : 1;
+        _end = end >= _start ? end : getThreadsNumber();
+    }
+    std::map<int, int> run()
+    {
+        std::map<int, int> results;
+        for (int i = _start; i <= _end; ++i)
+        {
+            DEBUG(_name << ": Running test with " << i << " number of threads (");
+            int t = _testLock(i);
+            DEBUG("took: " << t << "ms)\n");
+            results[i] = t;
+        }
+        return results;
+    }
+    static void spinner(mutex *m, int *val, std::size_t n)
+    {
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            lock_object lk(*m);
+            (*val)++;
+        }
+    }
+    template<typename Clock>
+    class Timer {
+    public:
+        Timer() : _start_time(Clock::now()) {}
+        Timer(const Timer&) = delete;
+        Timer& operator=(const Timer&) = delete;
+        int elapsed_ms()
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - _start_time).count();
+        }
+    private:
+        std::chrono::time_point<Clock> _start_time;
+    };
+
+private:
+    std::string _name;
+    std::function<void(mutex *m, int *val, std::size_t n)> _job = TestLock::spinner;
+    int _spins, _start, _end;
+
+    int _testLock(std::size_t threads_number) {
+        std::vector<std::thread> threads;
+        mutex m;
+        int i = 0;
+
+        Timer<std::chrono::high_resolution_clock> t;
+        DEBUG("spins: " << _spins << "; ");
+        for(int thread_num = 0; thread_num < threads_number; ++thread_num)
+        {
+            threads.emplace_back(_job, &m, &i, _spins);
+        }
+
+        std::for_each(threads.begin(), threads.end(), std::mem_fn(&std::thread::join));
+        return t.elapsed_ms();
+    }
+};
+
 
 int main()
 {
-    int threads_number = get_threads_number();
-    dbg = false;
-    if (dbg) std::cout << "This computer has " << Color::kBlue << threads_number << Color::kNone << " threads\n";
-    std::map<int, double> results;
-    for(int i = 1; i < threads_number + 1; ++i)
-    {
-        std::cout << "Running test with " << i << " number of threads (";
-        double t = run_test(i);
-        std::cout << t << ")\n";
-        results[i] = t;
-    }
-    for(auto pair : results){
-        std::cout << "Threads num (" << pair.first << ") time: " << pair.second << '\n';
-    }
+    // DEBUG("This computer has " << getThreadsNumber() << " threads\n");
+    TestLock<McsLock, McsLock::ScopedLock> tl("McsLock", 1 << 20);
+    auto results = tl.run();
     return 0;
 }

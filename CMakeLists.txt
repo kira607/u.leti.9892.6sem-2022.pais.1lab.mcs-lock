@@ -1,19 +1,13 @@
 cmake_minimum_required(VERSION 3.15)
-project(1lab_pas_3_2)
+set(PROJECT_NAME 1lab_pas_3_2)
+project(${PROJECT_NAME})
 find_package(Threads REQUIRED)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 set(CMAKE_CXX_STANDARD 14)
 
-add_executable(
-    1lab_pas_3_2
-        src/main.cpp
+set(SOURCE_FILES src/main.cpp)
 
-        src/color/color.cpp
-        src/color/color.h
+add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 
-        src/counter/counter.cpp
-        src/counter/counter.h
-)
-
-target_link_libraries(1lab_pas_3_2 PRIVATE Threads::Threads)
+target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
