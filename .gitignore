@@ -37,5 +37,8 @@ cmake-build-debug/
 build/
 .vscode/
 
+# latex output
+out/
+
 # other
 .example/

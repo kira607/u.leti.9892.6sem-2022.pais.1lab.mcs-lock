@@ -23,6 +23,22 @@ int getThreadsNumber()
     return static_cast<int>(std::thread::hardware_concurrency());
 }
 
+
+template<typename Clock>
+class Timer {
+public:
+    Timer() : _start_time(Clock::now()) {}
+    Timer(const Timer&) = delete;
+    Timer& operator=(const Timer&) = delete;
+    int elapsed_ms()
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - _start_time).count();
+    }
+private:
+    std::chrono::time_point<Clock> _start_time;
+};
+
+
 class McsLock {
 public:
     McsLock(const McsLock&) = delete;
@@ -77,8 +93,8 @@ public:
         _job = job;
         _name = name;
         _spins = spins > 0 ? spins : -spins;
-        _start = start >= 1 ? start : 1;
-        _end = end >= _start ? end : getThreadsNumber();
+        if(1 <= start && start <= getThreadsNumber()) _start = start; else _start = 1;
+        if(_start <= end && end <= getThreadsNumber()) _end = end; else _end = getThreadsNumber();
     }
     std::map<int, int> run()
     {
@@ -100,19 +116,6 @@ public:
             (*val)++;
         }
     }
-    template<typename Clock>
-    class Timer {
-    public:
-        Timer() : _start_time(Clock::now()) {}
-        Timer(const Timer&) = delete;
-        Timer& operator=(const Timer&) = delete;
-        int elapsed_ms()
-        {
-            return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - _start_time).count();
-        }
-    private:
-        std::chrono::time_point<Clock> _start_time;
-    };
 
 private:
     std::string _name;
@@ -139,8 +142,13 @@ private:
 
 int main()
 {
-    // DEBUG("This computer has " << getThreadsNumber() << " threads\n");
-    TestLock<McsLock, McsLock::ScopedLock> tl("McsLock", 1 << 20);
-    auto results = tl.run();
+    DEBUG("This computer has " << getThreadsNumber() << " threads\n");
+    std::vector<int> times{1<<12, 1<<15, 1<<17, 1<<19};
+    for(auto t : times)
+    {
+        std::cout << t << std::endl;
+        TestLock<McsLock, McsLock::ScopedLock> tl("McsLock", t);
+        auto results = tl.run();
+    }
     return 0;
 }
